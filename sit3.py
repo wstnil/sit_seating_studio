@@ -1,5 +1,5 @@
 import argparse
-from datetime import datetime
+from datetime import date, datetime
 import os
 import re
 import warnings
@@ -38,6 +38,11 @@ def sanitize_filename(name):
 
 
 def normalize_exam_date(value):
+    if pd.isna(value):
+        return ""
+    if isinstance(value, (date, datetime)):
+        return value.strftime("%d-%m-%Y")
+
     date_text = str(value).strip()
     if not date_text or date_text.casefold() in {"nan", "nat", "none"}:
         return ""
@@ -52,14 +57,27 @@ def normalize_exam_date(value):
         "%d/%m/%Y",
         "%d/%m/%y",
     )
+
+    try:
+        return datetime.fromisoformat(date_text.replace("Z", "+00:00")).strftime("%d-%m-%Y")
+    except ValueError:
+        pass
+
     for date_format in formats:
         try:
             return datetime.strptime(date_text, date_format).strftime("%d-%m-%Y")
         except ValueError:
-            continue
+            pass
+        for time_format in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
+            try:
+                return datetime.strptime(
+                    date_text, f"{date_format} {time_format}"
+                ).strftime("%d-%m-%Y")
+            except ValueError:
+                continue
 
     raise ValueError(
-        f"Invalid exam date {date_text!r}. Use MM/DD/YYYY, DD-MM-YYYY, or YYYY-MM-DD."
+        f"Invalid exam date {date_text!r}. Use MM/DD/YYYY, DD-MM-YYYY, or YYYY-MM-DD, optionally with a time."
     )
 
 
@@ -547,7 +565,8 @@ def generate_pdf(pdf_path, date, session, seat_numbers, block_number, block_data
         pdf.cell(table_width / 2, 10, "Room No: ___________", border=1, align="C", ln=True)
         pdf.set_font("Arial", "B", 10)
         pdf.ln(1)
-        pdf.cell(table_width, 10, f"Course Name: {course_name}  (Course Code: {course_code})", border=1, align="C", ln=True)
+        pdf.multi_cell(table_width, 7, f"Course Name: {course_name}", border=1, align="C")
+        pdf.multi_cell(table_width, 7, f"Course Code: {course_code}", border=1, align="C")
         pdf.cell(table_width / 2, 8, "Date and Time:", border=1, align="L")
         pdf.set_font("Arial", "", 10)
         pdf.cell(table_width / 2, 8, f"{date}    {session}", border=1, align="L")

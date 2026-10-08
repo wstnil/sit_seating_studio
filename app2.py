@@ -191,6 +191,15 @@ h1, h2, h3, .stTabs button span {{ font-family: 'Sora', 'Inter', sans-serif !imp
 def read_csv_cached(raw_bytes: bytes) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(raw_bytes), dtype=str)
 
+def find_default_column(columns, aliases: set[str]):
+    for column in columns:
+        normalized = (
+            str(column).replace("\ufeff", "").strip().replace(".", "").replace(" ", "_")
+        )
+        if normalized.casefold() in aliases:
+            return column
+    return None
+
 def date_sort_key(d: str):
     for fmt in ("%d-%m-%Y", "%d-%m-%Y %H:%M:%S"):
         try: return dt.datetime.strptime(str(d).split(" ")[0], fmt)
@@ -265,10 +274,31 @@ with top_col1:
         try: df_raw = read_csv_cached(uploaded.getvalue())
         except Exception: st.error("Invalid CSV")
         
-    qr_options = list(df_raw.columns) if df_raw is not None else ["—"]
+    columns = list(df_raw.columns) if df_raw is not None else []
+    qr_options = columns or ["—"]
     qr_idx = qr_options.index("PRN") if "PRN" in qr_options else 0
     qr_col = st.selectbox("🔲 QR Code Field", options=qr_options, index=qr_idx)
     st.session_state["qr_column"] = qr_col
+    date_placeholder = "— Select date column —"
+    session_placeholder = "— Select session column —"
+    date_options = [date_placeholder, *columns]
+    session_options = [session_placeholder, *columns]
+    default_date = find_default_column(columns, {"date", "exam_date", "date_of_exam"})
+    default_session = find_default_column(
+        columns, {"exam_session", "session", "exam_time", "time", "time_of_exam"}
+    )
+    date_col = st.selectbox(
+        "📅 Exam Date Column",
+        options=date_options,
+        index=date_options.index(default_date) if default_date is not None else 0,
+        disabled=df_raw is None,
+    )
+    session_col = st.selectbox(
+        "🕒 Exam Session Column",
+        options=session_options,
+        index=session_options.index(default_session) if default_session is not None else 0,
+        disabled=df_raw is None,
+    )
 
 with top_col2:
     college = st.text_input("🏛️ College Heading", placeholder="Institute Name")
@@ -308,6 +338,10 @@ st.write("")
 if generate_btn:
     if df_raw is None:
         st.error("⚠️ Upload student CSV first.")
+    elif date_col == date_placeholder or session_col == session_placeholder:
+        st.error("⚠️ Select the CSV columns for exam date and exam session.")
+    elif date_col == session_col:
+        st.error("⚠️ Exam date and exam session must use different columns.")
     else:
         with st.spinner("🏗️ Architecting plan…"):
             override = capacity
@@ -315,6 +349,8 @@ if generate_btn:
                 override = {b.split("=")[0].strip(): int(b.split("=")[1].strip()) for b in per_block.split(",")}
 
             plan_df = df_raw.copy()
+            plan_df["Date"] = plan_df[date_col]
+            plan_df["Exam_Session"] = plan_df[session_col]
             code_column = next((
                 column for column in plan_df.columns
                 if re.sub(r"\s+", "_", str(column).strip().replace(".", "")) == "Exam_Center_Code"
