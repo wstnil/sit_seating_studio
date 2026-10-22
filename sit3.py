@@ -177,10 +177,21 @@ def auto_allocate_blocks(df_students, block_capacity_override=30):
 
 def standardize_student_columns(df_students):
     df_students = df_students.copy()
-    df_students.columns = [
+    normalized_columns = [
         str(column).replace("\ufeff", "").strip().replace(".", "").replace(" ", "_")
         for column in df_students.columns
     ]
+    unique_columns = []
+    used_columns = set()
+    for column in normalized_columns:
+        unique_column = column
+        suffix = 2
+        while unique_column in used_columns:
+            unique_column = f"{column}_{suffix}"
+            suffix += 1
+        unique_columns.append(unique_column)
+        used_columns.add(unique_column)
+    df_students.columns = unique_columns
 
     aliases = {
         "Date": {"date", "exam_date", "date_of_exam"},

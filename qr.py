@@ -220,6 +220,7 @@ def generate_all_qrs(data: pd.DataFrame, output_dir: str, qr_column: str) -> Non
     for (exam_date, exam_session, subject_code, subject_name), group in labels.groupby(
         ["Date", "Session", "Subject Code", "Subject Name"], sort=False, dropna=False
     ):
+        group = group.sort_values(by="PRN", kind="stable")
         session_folder = sit3.format_session_label(exam_session) if exam_session else "Session"
         label_folder = os.path.join(
             output_dir,
