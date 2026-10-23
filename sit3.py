@@ -135,7 +135,7 @@ def auto_allocate_blocks(df_students, block_capacity_override=30):
     """
     Overwrites/allocates sequential block numbers (1, 2, 3...) per (Date, Exam_Session).
     Ensures that each block receives at most `block_capacity` students.
-    Students are ordered by Subject and PRN so students of the same subject sit together in contiguous benches.
+    Students are ordered by subject code and PRN so each subject stays together in block sequence.
     Returns the updated DataFrame with overridden 'Block_Number'.
     """
     slot_keys = ["Date", "Exam_Session"]
@@ -146,8 +146,14 @@ def auto_allocate_blocks(df_students, block_capacity_override=30):
     
     # Process each exam session
     for slot_vals, slot_df in df_students.groupby(slot_keys, sort=False):
-        # Sort students by Subject and PRN so each subject sits contiguously
-        slot_sorted = slot_df.sort_values(by=["Subject", "PRN"]).copy()
+        # Keep each subject code together and in a consistent order within blocks.
+        slot_sorted = slot_df.assign(
+            _subject_code_sort=slot_df["Subject"].map(
+                lambda subject: extract_code(subject)[0].strip().casefold()
+            )
+        ).sort_values(by=["_subject_code_sort", "PRN"], kind="stable").drop(
+            columns="_subject_code_sort"
+        )
         
         block_no = 1
         seat_counter = 0

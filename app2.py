@@ -471,7 +471,9 @@ with tab_rep:
                 block_capacity_override=cfg["override"], exam_heading=plan["exam_heading"]
             )
             if "qr_column" in st.session_state:
-                qr.generate_all_qrs(df_raw.copy(), out_dir, st.session_state["qr_column"])
+                qr.generate_all_qrs(
+                    plan["input_df"].copy(), out_dir, st.session_state["qr_column"]
+                )
                 
             prog.progress(1.0, text="✅ All PDFs ready!")
             zip_bytes = make_zip_bytes(Path(out_dir))
