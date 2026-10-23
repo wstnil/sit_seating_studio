@@ -246,7 +246,12 @@ def make_zip_bytes(root: Path) -> bytes:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in root.rglob("*"):
             if path.is_file():
-                archive.write(path, path.relative_to(root).as_posix())
+                relative_path = path.relative_to(root)
+                if relative_path.parts[0] == "QR Labels":
+                    archive_path = relative_path
+                else:
+                    archive_path = Path("Seating Reports", *relative_path.parts)
+                archive.write(path, archive_path.as_posix())
     return buffer.getvalue()
 
 # ════════════════════════════════════════════════════════════════════
@@ -466,10 +471,15 @@ with tab_rep:
         prog = st.progress(0.0, text="⚙️ Generating PDFs...")
         
         try:
-            sit3.create_directories_and_pdfs(
+            seating_result = sit3.create_directories_and_pdfs(
                 plan["input_df"], parent_dir=out_dir, custom_institute_name=plan["institute_name"],
                 block_capacity_override=cfg["override"], exam_heading=plan["exam_heading"]
             )
+            seating_pdfs = list(Path(out_dir).rglob("block_seating_arrangement_report-*.pdf"))
+            if seating_result["total_blocks"] and not seating_pdfs:
+                raise RuntimeError(
+                    "Seating blocks were allocated, but no block seating PDFs were generated."
+                )
             if "qr_column" in st.session_state:
                 qr.generate_all_qrs(
                     plan["input_df"].copy(), out_dir, st.session_state["qr_column"]
@@ -477,6 +487,10 @@ with tab_rep:
                 
             prog.progress(1.0, text="✅ All PDFs ready!")
             zip_bytes = make_zip_bytes(Path(out_dir))
+            qr_pdfs = list((Path(out_dir) / "QR Labels").rglob("*.pdf"))
+            st.success(
+                f"Generated {len(seating_pdfs)} seating PDFs and {len(qr_pdfs)} QR label PDFs."
+            )
             
             st.download_button("⬇️ Download All Files (ZIP)", data=zip_bytes, file_name="seating_reports.zip", mime="application/zip", width="stretch")
         except Exception as e:
