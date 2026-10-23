@@ -246,12 +246,7 @@ def make_zip_bytes(root: Path) -> bytes:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in root.rglob("*"):
             if path.is_file():
-                relative_path = path.relative_to(root)
-                if relative_path.parts[0] == "QR Labels":
-                    archive_path = relative_path
-                else:
-                    archive_path = Path("Seating Reports", *relative_path.parts)
-                archive.write(path, archive_path.as_posix())
+                archive.write(path, path.relative_to(root).as_posix())
     return buffer.getvalue()
 
 # ════════════════════════════════════════════════════════════════════
@@ -475,8 +470,15 @@ with tab_rep:
                 plan["input_df"], parent_dir=out_dir, custom_institute_name=plan["institute_name"],
                 block_capacity_override=cfg["override"], exam_heading=plan["exam_heading"]
             )
-            seating_pdfs = list(Path(out_dir).rglob("block_seating_arrangement_report-*.pdf"))
-            if seating_result["total_blocks"] and not seating_pdfs:
+            seating_pdfs = [
+                path
+                for path in Path(out_dir).rglob("*.pdf")
+                if "QR Labels" not in path.relative_to(out_dir).parts
+            ]
+            block_seating_pdfs = list(
+                Path(out_dir).rglob("block_seating_arrangement_report-*.pdf")
+            )
+            if seating_result["total_blocks"] and not block_seating_pdfs:
                 raise RuntimeError(
                     "Seating blocks were allocated, but no block seating PDFs were generated."
                 )
@@ -489,8 +491,15 @@ with tab_rep:
             zip_bytes = make_zip_bytes(Path(out_dir))
             qr_pdfs = list((Path(out_dir) / "QR Labels").rglob("*.pdf"))
             st.success(
-                f"Generated {len(seating_pdfs)} seating PDFs and {len(qr_pdfs)} QR label PDFs."
+                f"Generated {len(seating_pdfs)} seating report PDFs "
+                f"({len(block_seating_pdfs)} block seating PDFs) and "
+                f"{len(qr_pdfs)} QR label PDFs."
             )
+            with st.expander("Show generated PDF folders"):
+                for report_pdf in sorted(seating_pdfs):
+                    st.write(report_pdf.relative_to(out_dir).as_posix())
+                for qr_pdf in sorted(qr_pdfs):
+                    st.write(qr_pdf.relative_to(out_dir).as_posix())
             
             st.download_button("⬇️ Download All Files (ZIP)", data=zip_bytes, file_name="seating_reports.zip", mime="application/zip", width="stretch")
         except Exception as e:
