@@ -187,17 +187,60 @@ def generate_pdf_for_subject(subject_code, subject_name, group, date_folder):
     pdf.output(os.path.join(date_folder, filename))
     print(f"Generated: {filename}")
 
+def _date_sort_key(value: str):
+    """Convert a DD-MM-YYYY (or similar) date string into a sortable tuple."""
+    s = str(value or "").strip()
+    if not s:
+        return (3, "")
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            return (0, datetime.strptime(s.split(" ")[0], fmt).strftime("%Y%m%d"))
+        except Exception:
+            continue
+    return (2, s)
+
+
+def _session_sort_key(value: str):
+    """Sort exam sessions like '10.00 AM - 12.00 PM' chronologically."""
+    s = str(value or "").strip()
+    if not s:
+        return (1, "")
+    first = s.split("-")[0].strip()
+    # Convert '10.00 AM' -> (10, 0) for sorting
+    m = re.match(r"(\d+)\.(\d+)\s*(AM|PM)?", first, re.IGNORECASE)
+    if not m:
+        return (1, s)
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    ap = (m.group(3) or "").upper()
+    if ap == "PM" and hh != 12:
+        hh += 12
+    if ap == "AM" and hh == 12:
+        hh = 0
+    return (0, f"{hh:02d}{mm:02d}")
+
+
 def generate_all_qrs(data: pd.DataFrame, output_dir: str, qr_column: str) -> None:
     if qr_column not in data.columns:
         raise ValueError(f"QR code field not found in dataset: {qr_column}")
 
     labels = data.fillna("").copy()
+
+    # FIX: Fall back to "Exam_Date" if the canonical "Date" column is missing.
+    # This makes qr.py usable both from app2.py (which already standardizes the
+    # column to "Date") and from the CLI on the raw CSV (which uses "Exam_Date").
+    if "Date" not in labels.columns:
+        for candidate in ("Exam_Date", "ExamDate", "Date_of_Exam", "ExamDate"):
+            if candidate in labels.columns:
+                labels = labels.rename(columns={candidate: "Date"})
+                break
+
     for column in ("Date", "Name", "PRN", "Course", "Subject"):
         if column not in labels.columns:
             labels[column] = ""
 
     session_column = next(
-        (column for column in ("Exam_Session", "Session") if column in labels.columns),
+        (column for column in ("Exam_Session", "Session", "Exam_Time", "Time") if column in labels.columns),
         None,
     )
     labels["Session"] = (
@@ -206,6 +249,7 @@ def generate_all_qrs(data: pd.DataFrame, output_dir: str, qr_column: str) -> Non
         else ""
     )
     labels["Date"] = labels["Date"].map(sit3.normalize_exam_date)
+
     labels["QR_Value"] = labels[qr_column].astype(str)
     subject_details = labels["Subject"].map(parse_subject_details)
     labels["Subject Code"] = subject_details.map(lambda details: details[0] or "Subject")
@@ -217,8 +261,18 @@ def generate_all_qrs(data: pd.DataFrame, output_dir: str, qr_column: str) -> Non
     ]
     labels["Random_Digit_Number"] = labels["QR_Value"]
 
+    # FIX: Sort the whole frame chronologically by (Date, Session, Subject, PRN)
+    # BEFORE groupby, so date folders are emitted in date-wise order and the
+    # iteration order is no longer "first appearance" order.
+    labels["_date_key"] = labels["Date"].map(_date_sort_key)
+    labels["_sess_key"] = labels["Session"].map(_session_sort_key)
+    labels = labels.sort_values(
+        by=["_date_key", "_sess_key", "Subject Code", "Subject Name", "PRN"],
+        kind="stable",
+    ).drop(columns=["_date_key", "_sess_key"]).reset_index(drop=True)
+
     for (exam_date, exam_session, subject_code, subject_name), group in labels.groupby(
-        ["Date", "Session", "Subject Code", "Subject Name"], sort=False, dropna=False
+        ["Date", "Session", "Subject Code", "Subject Name"], sort=True, dropna=False
     ):
         group = group.sort_values(by="PRN", kind="stable")
         session_folder = sit3.format_session_label(exam_session) if exam_session else "Session"

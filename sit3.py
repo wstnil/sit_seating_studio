@@ -135,44 +135,61 @@ def auto_allocate_blocks(df_students, block_capacity_override=30):
     """
     Overwrites/allocates sequential block numbers (1, 2, 3...) per (Date, Exam_Session).
     Ensures that each block receives at most `block_capacity` students.
-    Students are ordered by subject code and PRN so each subject stays together in block sequence.
+
+    IMPORTANT (FIX): Students of DIFFERENT subjects are NEVER mixed in the same block.
+    When the subject changes, a new block is started immediately - the remaining
+    seats in the current block are left empty rather than being filled with
+    another subject's students. If a single subject has more students than the
+    block capacity, it overflows into consecutive blocks (same subject split is OK).
+
     Returns the updated DataFrame with overridden 'Block_Number'.
     """
     slot_keys = ["Date", "Exam_Session"]
     if "Exam_Center_Code" in df_students.columns:
-        slot_keys.append("Exam_Center_Code")
-        
+        # Only include Exam_Center_Code as a grouping key if it actually has
+        # any non-empty value. If every row is NaN/empty, including it would
+        # cause pandas groupby to drop ALL rows (because NaN group keys are
+        # dropped by default), resulting in zero allocated blocks.
+        non_empty_codes = df_students["Exam_Center_Code"].fillna("").astype(str).str.strip()
+        if (non_empty_codes != "").any():
+            slot_keys.append("Exam_Center_Code")
+
     allocated_dfs = []
-    
+
     # Process each exam session
     for slot_vals, slot_df in df_students.groupby(slot_keys, sort=False):
-        # Keep each subject code together and in a consistent order within blocks.
-        slot_sorted = slot_df.assign(
-            _subject_code_sort=slot_df["Subject"].map(
-                lambda subject: extract_code(subject)[0].strip().casefold()
-            )
-        ).sort_values(by=["_subject_code_sort", "PRN"], kind="stable").drop(
-            columns="_subject_code_sort"
-        )
-        
+        # Sort students by Subject and PRN so each subject sits contiguously
+        slot_sorted = slot_df.sort_values(by=["Subject", "PRN"], kind="stable").copy()
+        slot_sorted = slot_sorted.reset_index(drop=True)
+
         block_no = 1
         seat_counter = 0
         curr_capacity = resolve_capacity(block_capacity_override, block_no, default=30)
-        
+        prev_subject = None
+
         assigned_block_numbers = []
-        for _ in range(len(slot_sorted)):
-            if seat_counter >= curr_capacity:
+        for idx in range(len(slot_sorted)):
+            current_subject = str(slot_sorted.iloc[idx].get("Subject", "")).strip()
+
+            # Subject change => start a NEW block so subjects don't mix
+            if prev_subject is not None and current_subject != prev_subject:
                 block_no += 1
                 seat_counter = 0
                 curr_capacity = resolve_capacity(block_capacity_override, block_no, default=30)
-                
+            # Same subject but block full => also start a new block (overflow allowed)
+            elif seat_counter >= curr_capacity:
+                block_no += 1
+                seat_counter = 0
+                curr_capacity = resolve_capacity(block_capacity_override, block_no, default=30)
+
             assigned_block_numbers.append(str(block_no))
             seat_counter += 1
-            
+            prev_subject = current_subject
+
         slot_sorted["Block_Number"] = assigned_block_numbers
         slot_sorted["Block Number"] = assigned_block_numbers
         allocated_dfs.append(slot_sorted)
-        
+
     if not allocated_dfs:
         return df_students
     out_df = pd.concat(allocated_dfs, ignore_index=True)
@@ -281,9 +298,14 @@ def create_directories_and_pdfs(student_list_csv, parent_dir="Seating arrangemen
 
     grouping_keys = ["Date", "Exam_Session", "Subject", "Block_Number"]
     if "Exam_Center_Code" in df_students.columns:
-        grouping_keys.append("Exam_Center_Code")
+        # Only include Exam_Center_Code as a grouping key if it actually has
+        # any non-empty value. If every row is NaN/empty, groupby would drop
+        # ALL rows and produce zero block reports.
+        non_empty_codes = df_students["Exam_Center_Code"].fillna("").astype(str).str.strip()
+        if (non_empty_codes != "").any():
+            grouping_keys.append("Exam_Center_Code")
 
-    total_groups = df_students.groupby(grouping_keys).ngroups
+    total_groups = df_students.groupby(grouping_keys, dropna=False).ngroups
     
     # Generate Group Summary Report
     group_summary_report = {}
@@ -295,7 +317,7 @@ def create_directories_and_pdfs(student_list_csv, parent_dir="Seating arrangemen
     generate_group_summary_report(group_summary_report, group_summary_dir, institute_name, exam_heading=exam_heading)
 
     # Process each Block Group
-    for idx, (keys, group_df) in enumerate(df_students.groupby(grouping_keys, sort=False)):
+    for idx, (keys, group_df) in enumerate(df_students.groupby(grouping_keys, sort=False, dropna=False)):
         date = str(keys[0]).strip()
         session_raw = str(keys[1]).strip()
         session = format_session_label(session_raw)

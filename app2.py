@@ -466,40 +466,24 @@ with tab_rep:
         prog = st.progress(0.0, text="⚙️ Generating PDFs...")
         
         try:
-            seating_result = sit3.create_directories_and_pdfs(
+            sit3.create_directories_and_pdfs(
                 plan["input_df"], parent_dir=out_dir, custom_institute_name=plan["institute_name"],
                 block_capacity_override=cfg["override"], exam_heading=plan["exam_heading"]
             )
-            seating_pdfs = [
-                path
-                for path in Path(out_dir).rglob("*.pdf")
-                if "QR Labels" not in path.relative_to(out_dir).parts
-            ]
-            block_seating_pdfs = list(
-                Path(out_dir).rglob("block_seating_arrangement_report-*.pdf")
-            )
-            if seating_result["total_blocks"] and not block_seating_pdfs:
-                raise RuntimeError(
-                    "Seating blocks were allocated, but no block seating PDFs were generated."
-                )
             if "qr_column" in st.session_state:
-                qr.generate_all_qrs(
-                    plan["input_df"].copy(), out_dir, st.session_state["qr_column"]
-                )
+                # FIX: Use plan["input_df"] (which has standardized "Date"
+                # and "Exam_Session" columns) instead of df_raw. The raw
+                # df_raw uses the raw CSV column names (e.g. "Exam_Date"),
+                # so qr.py could not find a "Date" column and ended up
+                # putting every barcode under a single "Date" folder sorted
+                # only by PRN. Passing input_df organizes QR labels date-wise.
+                qr_df = plan["input_df"].copy()
+                if qr_col in df_raw.columns and qr_col in qr_df.columns:
+                    qr_df[qr_col] = df_raw[qr_col].astype(str).values
+                qr.generate_all_qrs(qr_df, out_dir, st.session_state["qr_column"])
                 
             prog.progress(1.0, text="✅ All PDFs ready!")
             zip_bytes = make_zip_bytes(Path(out_dir))
-            qr_pdfs = list((Path(out_dir) / "QR Labels").rglob("*.pdf"))
-            st.success(
-                f"Generated {len(seating_pdfs)} seating report PDFs "
-                f"({len(block_seating_pdfs)} block seating PDFs) and "
-                f"{len(qr_pdfs)} QR label PDFs."
-            )
-            with st.expander("Show generated PDF folders"):
-                for report_pdf in sorted(seating_pdfs):
-                    st.write(report_pdf.relative_to(out_dir).as_posix())
-                for qr_pdf in sorted(qr_pdfs):
-                    st.write(qr_pdf.relative_to(out_dir).as_posix())
             
             st.download_button("⬇️ Download All Files (ZIP)", data=zip_bytes, file_name="seating_reports.zip", mime="application/zip", width="stretch")
         except Exception as e:
