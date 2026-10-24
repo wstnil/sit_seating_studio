@@ -6,7 +6,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import pandas as pd
-from fpdf import FPDF
+from fpdf import FPDF, XPos, YPos
 
 BENCH_NO = 1
 BLOCK_RECORD = {}
@@ -569,10 +569,14 @@ def generate_pdf(pdf_path, date, session, seat_numbers, block_number, block_data
     pdf.add_page()
     table_width = pdf.w - 20
     course_code = course_name = ""
+    # FIX (per user request): Build a SINGLE merged "Course Code - Course Name"
+    # string so the heading shows paired code+name per course, e.g.
+    # "23AD2301 - Linear Algebra and Probability, 23AR2301 - Sensors in ..."
+    # instead of two separate "Course Code:" and "Course Name:" lines.
+    course_pairs = []  # list of (code, title)
     try:
-        codes = []
-        titles = []
         if block_data:
+            seen_keys = set()
             for r in block_data:
                 subject_str = str(r[2]) if len(r) > 2 and r[2] else ""
                 if not subject_str: continue
@@ -583,11 +587,20 @@ def generate_pdf(pdf_path, date, session, seat_numbers, block_number, block_data
                     p_s = [p.strip() for p in subject_str.split("/") if p.strip()]
                     c_p = p_s[0] if p_s else subject_str.strip()
                     t_p = next((p for p in reversed(p_s) if re.search(r"[A-Za-z]", p)), "")
-                if c_p and c_p not in codes: codes.append(c_p)
-                if t_p and t_p not in titles: titles.append(t_p)
-        course_code = ", ".join(codes)
-        course_name = ", ".join(titles)
-    except Exception: pass
+                # de-dup by (code, title) pair
+                key = (c_p, t_p)
+                if c_p and key not in seen_keys:
+                    seen_keys.add(key)
+                    course_pairs.append((c_p, t_p))
+        # Single merged string used for the heading
+        course_code = ", ".join(c for c, _ in course_pairs)
+        course_name = ", ".join(t for _, t in course_pairs)
+        # New combined display string: "code1 - name1, code2 - name2, ..."
+        course_combined = ", ".join(
+            (f"{c} - {t}" if t else c) for c, t in course_pairs
+        )
+    except Exception:
+        course_combined = ""
 
     def draw_header():
         add_centered_logo(pdf)
@@ -603,8 +616,13 @@ def generate_pdf(pdf_path, date, session, seat_numbers, block_number, block_data
         pdf.cell(table_width / 2, 10, "Room No: ___________", border=1, align="C", ln=True)
         pdf.set_font("Arial", "B", 10)
         pdf.ln(1)
-        pdf.multi_cell(table_width, 7, f"Course Name: {course_name}", border=1, align="C")
-        pdf.multi_cell(table_width, 7, f"Course Code: {course_code}", border=1, align="C")
+        # FIX (per user request): Show ONE merged line
+        # "Course: 23AD2301 - Linear Algebra and Probability, 23AR2301 - ..."
+        # instead of two separate "Course Code:" / "Course Name:" lines.
+        # Also use new_x=XPos.LMARGIN, new_y=YPos.NEXT so cursor returns to
+        # left margin after multi_cell (otherwise next cell goes off-page).
+        pdf.multi_cell(table_width, 7, f"Course: {course_combined}", border=1, align="C",
+                       new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.cell(table_width / 2, 8, "Date and Time:", border=1, align="L")
         pdf.set_font("Arial", "", 10)
         pdf.cell(table_width / 2, 8, f"{date}    {session}", border=1, align="L")
@@ -612,7 +630,8 @@ def generate_pdf(pdf_path, date, session, seat_numbers, block_number, block_data
         pdf.cell(table_width / 2, 8, f"Institute Code: {institute_code}", border=1, align="L")
         x, y = pdf.get_x(), pdf.get_y()
         pdf.set_font("Arial", "", 8)
-        pdf.multi_cell(table_width / 2, 8, f"Institute Name: {institute_name}", border=1, align="L")
+        pdf.multi_cell(table_width / 2, 8, f"Institute Name: {institute_name}", border=1, align="L",
+                       new_x=XPos.RIGHT, new_y=YPos.TOP)
         pdf.set_xy(x + table_width / 2, y + 8)
         pdf.ln(2)
         pdf.set_font("Arial", "B", 14)
@@ -995,7 +1014,7 @@ def generate_seat_number_summary_pdf(pdf_path, seat_number_summary_dict, institu
             course_title = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
             pdf.cell(table_width, 10, f"{course_code} {course_title}".strip(), align="C", ln=True, border=1)
             pdf.cell(table_width / 2, 10, f"Date: {date.split(' ')[0]}", align="L", border=1); pdf.cell(table_width / 2, 10, f"No. of students: {len(row['Seat numbers'])}", align="R", border=1); pdf.ln()
-            pdf.set_font("Arial", "", 6); pdf.set_x(10); pdf.multi_cell(table_width, 6, ", ".join(row["Seat numbers"]), border=1, align="L")
+            pdf.set_font("Arial", "", 6); pdf.set_x(10); pdf.multi_cell(table_width, 6, ", ".join(row["Seat numbers"]), border=1, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.output(pdf_path)
 
 def generate_supervision_summary_pdf(pdf_path, institute_name, year, session, block_data, exam_heading="Winter Semester Examination 2026 Final Year B.Tech (sem - VII )"):
