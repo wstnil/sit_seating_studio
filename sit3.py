@@ -134,13 +134,18 @@ def resolve_capacity(cap_spec, block_num=None, default=30):
 def auto_allocate_blocks(df_students, block_capacity_override=30):
     """
     Overwrites/allocates sequential block numbers (1, 2, 3...) per (Date, Exam_Session).
-    Ensures that each block receives at most `block_capacity` students.
+    Each block holds AT MOST `block_capacity` students.
 
-    IMPORTANT (FIX): Students of DIFFERENT subjects are NEVER mixed in the same block.
-    When the subject changes, a new block is started immediately - the remaining
-    seats in the current block are left empty rather than being filled with
-    another subject's students. If a single subject has more students than the
-    block capacity, it overflows into consecutive blocks (same subject split is OK).
+    Strategy ("fill capacity, subjects kept contiguous when possible"):
+      * Students are sorted by (Subject, PRN) within each exam slot so that
+        students of the same subject sit together in contiguous benches.
+      * Blocks are then filled strictly up to `block_capacity` seats in that
+        sorted order. The next subject's students continue filling the same
+        block if there are remaining seats (mixing allowed across subjects,
+        but same-subject students are never interleaved with another subject).
+      * If a single subject has more students than the capacity, it cleanly
+        overflows into the next block (e.g. 35 students of one subject with
+        capacity 30 -> 30 in block N, 5 in block N+1).
 
     Returns the updated DataFrame with overridden 'Block_Number'.
     """
@@ -158,33 +163,27 @@ def auto_allocate_blocks(df_students, block_capacity_override=30):
 
     # Process each exam session
     for slot_vals, slot_df in df_students.groupby(slot_keys, sort=False):
-        # Sort students by Subject and PRN so each subject sits contiguously
+        # Sort students by Subject and PRN so each subject sits contiguously.
+        # This keeps same-subject students together in adjacent benches while
+        # still allowing the block to be filled up to capacity across subjects.
         slot_sorted = slot_df.sort_values(by=["Subject", "PRN"], kind="stable").copy()
         slot_sorted = slot_sorted.reset_index(drop=True)
 
         block_no = 1
         seat_counter = 0
         curr_capacity = resolve_capacity(block_capacity_override, block_no, default=30)
-        prev_subject = None
 
         assigned_block_numbers = []
-        for idx in range(len(slot_sorted)):
-            current_subject = str(slot_sorted.iloc[idx].get("Subject", "")).strip()
-
-            # Subject change => start a NEW block so subjects don't mix
-            if prev_subject is not None and current_subject != prev_subject:
-                block_no += 1
-                seat_counter = 0
-                curr_capacity = resolve_capacity(block_capacity_override, block_no, default=30)
-            # Same subject but block full => also start a new block (overflow allowed)
-            elif seat_counter >= curr_capacity:
+        for _ in range(len(slot_sorted)):
+            # Block full => start a new block (mixing across subjects is OK,
+            # same-subject overflow is naturally handled by the sort order).
+            if seat_counter >= curr_capacity:
                 block_no += 1
                 seat_counter = 0
                 curr_capacity = resolve_capacity(block_capacity_override, block_no, default=30)
 
             assigned_block_numbers.append(str(block_no))
             seat_counter += 1
-            prev_subject = current_subject
 
         slot_sorted["Block_Number"] = assigned_block_numbers
         slot_sorted["Block Number"] = assigned_block_numbers
@@ -633,7 +632,15 @@ def generate_pdf(pdf_path, date, session, seat_numbers, block_number, block_data
     headers = ["Bench No", "Program", "PRN No", "Student Name"]
     draw_table_header(pdf, col_widths, row_height, headers)
     pdf.set_font("Arial", "", 9)
-    student_data = sorted(list(set(map(tuple, block_data))), key=lambda x: natural_key(str(x[4])))
+    # FIX: Sort by SUBJECT first (so same-subject students stay contiguous),
+    # then by PRN within each subject. The previous sort was PRN-only, which
+    # caused subjects to be interleaved ("idhar-udhar") inside a block even
+    # though auto_allocate_blocks had already kept them in subject order.
+    # block_data row layout: [None, program, subject, seat_no, prn, name]
+    student_data = sorted(
+        list(set(map(tuple, block_data))),
+        key=lambda x: (str(x[2]).lower(), natural_key(str(x[4])))
+    )
     
     prev_subject_key = None
     for idx, row in enumerate(student_data, start=1):
@@ -874,7 +881,18 @@ def generate_attendance_sheet_pdf(pdf_path, institute_name, date, session, insti
         pdf.ln()
 
     draw_attendance_header()
-    attendance_data = sorted(block_data, key=lambda x: (natural_key(str(x[0])), natural_key(extract_seat_no(str(x[1])))))
+    # FIX: Sort by SUBJECT first (using prn_to_subject mapping), then by PRN.
+    # block_data row layout: [prn, full_details, "", "", ""]
+    # Previous sort was PRN-only which interleaved subjects ("idhar-udhar").
+    prn_to_subj_map = prn_to_subject or {}
+    attendance_data = sorted(
+        block_data,
+        key=lambda x: (
+            str(prn_to_subj_map.get(str(x[0]), "")).lower(),
+            natural_key(str(x[0])),
+            natural_key(extract_seat_no(str(x[1])))
+        )
+    )
 
     def parse_subject(s):
         s = str(s); code = s; title = ""
