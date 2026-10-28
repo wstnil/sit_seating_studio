@@ -6,11 +6,63 @@
 2. ~~Capacity not honored~~ — FIXED
 3. ~~QR barcodes not date-wise~~ — FIXED
 4. ~~Course codes invisible in heading~~ — FIXED
-5. **NEW: Show Course Code + Course Name as ONE merged line** — FIXED (this update)
+5. ~~Course Code + Course Name as separate lines~~ — FIXED (merged into one line)
+6. **NEW: "SEATING ARRANGEMENT" title overlapping / collapsing with Institute Name** — FIXED (this update)
 
-## The Latest Fix — Merged Course Heading Line
+## The Latest Fix — Institute Name / Title Collapse (Block Seating Arrangement PDF)
 
-### User Request
+### User Report
+
+> "for block seating arrangement ............ seating arrangement name getting collapse"
+
+In the generated `block_seating_arrangement_report-*.pdf`, the big
+**"SEATING ARRANGEMENT"** heading was drawn ON TOP of the second line of the
+"Institute Name:" cell (e.g. "Engineering,Yadrav" collided with the title),
+and the Institute Code / Institute Name cell borders were misaligned.
+
+### Root Cause (was in `sit3.py :: generate_pdf() :: draw_header()`)
+
+The Institute Name cell is a `multi_cell` that **wraps to 2+ lines** when the
+institute name is long ("Sharad Institute of Technology College of
+Engineering,Yadrav" needs 2 lines at font size 8 in a half-width cell).
+But the code hardcoded the next cursor position as `y + 8` — the height of
+ONE line only:
+
+```python
+pdf.multi_cell(table_width / 2, 8, f"Institute Name: {institute_name}", ...)
+pdf.set_xy(x + table_width / 2, y + 8)   # ← BUG: assumes 1 line (8mm)
+pdf.ln(2)
+pdf.cell(table_width, 10, "SEATING ARRANGEMENT", ...)  # drawn at y+10 → overlaps line 2 (y+8..y+16)
+```
+
+Measured on the real PDF: line 2 "Engineering,Yadrav" bottom = 219.5pt,
+title top = 217.0pt → **2.4pt collision**.
+
+### Fix
+
+1. **Measure first**: count the wrapped lines of the Institute Name text
+   (`multi_cell(..., split_only=True)` — same technique already used in
+   `generate_summary_pdf` / `generate_attendance_sheet_pdf`).
+2. **Equal row height**: draw the "Institute Code" cell with the SAME height
+   as the wrapped Institute Name cell, so the row borders stay aligned.
+3. **Draw title below the row**: place the cursor below the taller of the two
+   cells (`max(pdf.get_y(), row_y + inst_row_h)`) before drawing
+   "SEATING ARRANGEMENT".
+
+### Verification (automated text-bbox overlap scan with pdfplumber)
+
+- BEFORE fix: 5/5 block seating PDFs (one per exam date) had the title/name
+  collision.
+- AFTER fix: 42/42 generated PDFs clean (0 overlapping word pairs), including:
+  - multi-page block reports (header repeats on page 2+),
+  - extra-long institute name (3-line wrap),
+  - short institute name (1 line).
+
+## All Earlier Fixes (Still In Place)
+
+### Merged Course Heading Line
+
+#### User Request
 
 > "Course name mai (course code - course name) aisaa krr, separate separate nko"
 

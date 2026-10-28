@@ -627,12 +627,26 @@ def generate_pdf(pdf_path, date, session, seat_numbers, block_number, block_data
         pdf.set_font("Arial", "", 10)
         pdf.cell(table_width / 2, 8, f"{date}    {session}", border=1, align="L")
         pdf.ln()
-        pdf.cell(table_width / 2, 8, f"Institute Code: {institute_code}", border=1, align="L")
-        x, y = pdf.get_x(), pdf.get_y()
+        # FIX (name collapse): The Institute Name cell is a multi_cell that can
+        # wrap to 2+ lines when the institute name is long. The old code
+        # hardcoded the next cursor position as y+8 (ONE line height), so the
+        # big "SEATING ARRANGEMENT" title was drawn ON TOP of the wrapped
+        # second line (e.g. "Engineering,Yadrav" collided with the title).
+        # Now: measure the real wrapped height FIRST, give BOTH cells of this
+        # row the same height (so the borders stay aligned), and only then
+        # draw the title BELOW the whole row.
+        row_x, row_y = pdf.get_x(), pdf.get_y()
+        inst_text = f"Institute Name: {institute_name}"
         pdf.set_font("Arial", "", 8)
-        pdf.multi_cell(table_width / 2, 8, f"Institute Name: {institute_name}", border=1, align="L",
-                       new_x=XPos.RIGHT, new_y=YPos.TOP)
-        pdf.set_xy(x + table_width / 2, y + 8)
+        inst_lines = pdf.multi_cell(table_width / 2, 8, inst_text, border=0, align="L", split_only=True)
+        inst_row_h = 8 * max(1, len(inst_lines))
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(table_width / 2, inst_row_h, f"Institute Code: {institute_code}", border=1, align="L")
+        pdf.set_xy(row_x + table_width / 2, row_y)
+        pdf.set_font("Arial", "", 8)
+        pdf.multi_cell(table_width / 2, 8, inst_text, border=1, align="L",
+                       new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_y(max(pdf.get_y(), row_y + inst_row_h))
         pdf.ln(2)
         pdf.set_font("Arial", "B", 14)
         pdf.cell(table_width, 10, "SEATING ARRANGEMENT", ln=True, align="C")
